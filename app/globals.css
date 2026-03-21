@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+/* ── Root variables ──────────────────────────────────────────────────── */
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -10,17 +11,91 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Samway brand palette */
+  --color-sw-950: #071a07;
+  --color-sw-900: #0d3b0e;
+  --color-sw-800: #1a4f1a;
+  --color-sw-700: #1b5e20;
+  --color-sw-600: #2e7d32;
+  --color-sw-500: #388e3c;
+  --color-sw-400: #4caf50;
+  --color-sw-yellow: #f9c900;
+  --color-sw-yellow-dark: #e6b800;
+  --color-sw-yellow-light: #fffde7;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* ── Base ────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+/* ── Animated brand gradient background ─────────────────────────────── */
+.bg-brand {
+  background: linear-gradient(135deg, #071a07 0%, #1a4f1a 45%, #1b5e20 75%, #0d3b0e 100%);
+  background-size: 300% 300%;
+  animation: gradientShift 16s ease infinite;
+}
+
+@keyframes gradientShift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ── Glass card surface ──────────────────────────────────────────────── */
+.glass-card {
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+/* ── Slide-up entrance ───────────────────────────────────────────────── */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-up {
+  animation: slideUp 0.38s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* ── Success pulse ring ──────────────────────────────────────────────── */
+@keyframes successPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.45); }
+  70%  { box-shadow: 0 0 0 18px rgba(76, 175, 80, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+}
+.animate-success-pulse { animation: successPulse 0.9s ease-out; }
+
+/* ── Input focus glow ────────────────────────────────────────────────── */
+.input-sw {
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.input-sw:focus {
+  outline: none;
+  border-color: #1b5e20;
+  box-shadow: 0 0 0 3px rgba(27, 94, 32, 0.14);
+}
+
+/* ── Button press ────────────────────────────────────────────────────── */
+.btn-press { transition: transform 0.08s ease; }
+.btn-press:active:not(:disabled) { transform: scale(0.97); }
+
+/* ── Digital clock numerals ──────────────────────────────────────────── */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
