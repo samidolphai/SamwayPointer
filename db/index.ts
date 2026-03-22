@@ -1,3 +1,4 @@
+const IS_NETLIFY = !!(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
 /**
  * Data store — Upstash Redis in production (via REST, no SDK), JSON file locally.
  *
