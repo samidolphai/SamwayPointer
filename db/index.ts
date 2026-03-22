@@ -43,7 +43,7 @@ interface DBData {
 }
 
 // ── Environment detection ─────────────────────────────────────────────────
-const IS_NETLIFY = process.env.NETLIFY === 'true';
+
 
 // ── Local file path (dev only) ────────────────────────────────────────────
 const DB_PATH =
