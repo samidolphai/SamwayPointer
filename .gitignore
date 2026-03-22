@@ -42,3 +42,6 @@ next-env.d.ts
 
 # clock records data (keep out of git)
 /data/
+
+# Local Netlify folder
+.netlify

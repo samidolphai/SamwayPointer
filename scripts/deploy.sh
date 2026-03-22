@@ -23,7 +23,7 @@ echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━�
 step "Checking Netlify CLI"
 if ! command -v netlify &>/dev/null; then
   echo "Installing Netlify CLI globally…"
-  npm install -g netlify-cli
+  sudo npm install -g netlify-cli
   ok "Netlify CLI installed"
 else
   ok "Netlify CLI already installed ($(netlify --version))"
