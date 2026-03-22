@@ -8,7 +8,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const photo = getRecordPhoto(Number(id));
+  const photo = await getRecordPhoto(Number(id));
   if (!photo) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   return NextResponse.json({ photo });
 }

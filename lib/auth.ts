@@ -7,15 +7,12 @@ const SECRET = new TextEncoder().encode(
 );
 
 export async function verifyAdminPassword(password: string): Promise<boolean> {
-  // First check DB-stored password hash (set via changeAdminPassword)
-  const settings = getAdminSettings();
+  const settings = await getAdminSettings();
   if (settings?.password_hash) {
     return bcryptjs.compare(password, settings.password_hash);
   }
-  // Fall back to env vars
   const hash = process.env.ADMIN_PASSWORD_HASH;
   if (!hash) {
-    // Fallback for dev — set ADMIN_PASSWORD in .env.local directly
     return password === (process.env.ADMIN_PASSWORD ?? 'admin');
   }
   return bcryptjs.compare(password, hash);
@@ -30,8 +27,8 @@ export async function changeAdminPassword(
     return { ok: false, error: 'Incorrect current password' };
   }
   const newHash = await bcryptjs.hash(newPass, 12);
-  const existing = getAdminSettings();
-  setAdminSettings({
+  const existing = await getAdminSettings();
+  await setAdminSettings({
     password_hash: newHash,
     recovery_email: existing?.recovery_email ?? null,
     recovery_phone: existing?.recovery_phone ?? null,

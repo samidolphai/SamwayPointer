@@ -3,13 +3,13 @@ export const runtime = 'nodejs';
 import { getAllForExport } from '@/db';
 
 export async function GET() {
-  const records = getAllForExport();
+  const records = await getAllForExport();
 
-  const header = 'id,employee_id,employee_name,action,timestamp,notified\n';
+  const header = 'id,employee_id,employee_name,action,timestamp,reason,notified\n';
   const rows = records
     .map(
       (r) =>
-        `${r.id},${r.employee_id ?? ''},"${r.employee_name.replace(/"/g, '""')}",${r.action},${r.timestamp},${r.notified}`
+        `${r.id},${r.employee_id ?? ''},"${r.employee_name.replace(/"/g, '""')}",${r.action},${r.timestamp},"${(r.reason ?? '').replace(/"/g, '""')}",${r.notified}`
     )
     .join('\n');
 

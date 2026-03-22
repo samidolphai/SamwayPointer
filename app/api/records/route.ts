@@ -11,6 +11,6 @@ export async function GET(req: Request) {
   const page = Number(url.searchParams.get('page') ?? 1);
   const pageSize = Number(url.searchParams.get('pageSize') ?? 50);
 
-  const result = queryRecords({ name, from, to, page, pageSize });
+  const result = await queryRecords({ name, from, to, page, pageSize });
   return NextResponse.json(result);
 }

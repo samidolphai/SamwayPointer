@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { listEmployees, createEmployee, hashPin } from '@/db';
 
 export async function GET() {
-  const employees = listEmployees();
+  const employees = await listEmployees();
   return NextResponse.json(employees);
 }
 
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const emp = createEmployee({
+    const emp = await createEmployee({
       employee_id: employee_id.trim().toUpperCase(),
       name: name.trim(),
       face_photo: typeof face_photo === 'string' ? face_photo : null,
@@ -41,11 +41,7 @@ export async function POST(req: Request) {
   } catch (err) {
     if ((err as Error).message === 'DUPLICATE_EMPLOYEE_ID') {
       return NextResponse.json(
-        {
-          error: 'This Employee ID is already in use.',
-          error_fr: 'Cet identifiant est déjà utilisé.',
-          code: 'DUPLICATE_EMPLOYEE_ID',
-        },
+        { error: 'This Employee ID is already in use.', error_fr: 'Cet identifiant est déjà utilisé.', code: 'DUPLICATE_EMPLOYEE_ID' },
         { status: 409 }
       );
     }

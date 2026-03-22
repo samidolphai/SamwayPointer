@@ -8,9 +8,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const emp = getEmployeeByInternalId(id);
+  const emp = await getEmployeeByInternalId(id);
   if (!emp) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  // Return full record including face_photo for the edit modal
   return NextResponse.json(emp);
 }
 
@@ -27,34 +26,21 @@ export async function PUT(
   }
 
   const { employee_id, name, face_photo, pin } = body as Record<string, unknown>;
-
   const patch: Record<string, unknown> = {};
-  if (typeof employee_id === 'string' && employee_id.trim()) {
-    patch.employee_id = employee_id.trim().toUpperCase();
-  }
-  if (typeof name === 'string' && name.trim()) {
-    patch.name = name.trim();
-  }
-  if (face_photo !== undefined) {
-    patch.face_photo = typeof face_photo === 'string' ? face_photo : null;
-  }
-  // Only update pin_hash if a new PIN is provided (blank = leave unchanged)
-  if (typeof pin === 'string' && pin.trim()) {
-    patch.pin_hash = await hashPin(pin.trim());
-  }
+
+  if (typeof employee_id === 'string' && employee_id.trim()) patch.employee_id = employee_id.trim().toUpperCase();
+  if (typeof name === 'string' && name.trim()) patch.name = name.trim();
+  if (face_photo !== undefined) patch.face_photo = typeof face_photo === 'string' ? face_photo : null;
+  if (typeof pin === 'string' && pin.trim()) patch.pin_hash = await hashPin(pin.trim());
 
   try {
-    const emp = updateEmployee(id, patch);
+    const emp = await updateEmployee(id, patch);
     if (!emp) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     return NextResponse.json(emp);
   } catch (err) {
     if ((err as Error).message === 'DUPLICATE_EMPLOYEE_ID') {
       return NextResponse.json(
-        {
-          error: 'This Employee ID is already in use.',
-          error_fr: 'Cet identifiant est déjà utilisé.',
-          code: 'DUPLICATE_EMPLOYEE_ID',
-        },
+        { error: 'This Employee ID is already in use.', error_fr: 'Cet identifiant est déjà utilisé.', code: 'DUPLICATE_EMPLOYEE_ID' },
         { status: 409 }
       );
     }
@@ -67,7 +53,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const deleted = deleteEmployee(id);
+  const deleted = await deleteEmployee(id);
   if (!deleted) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

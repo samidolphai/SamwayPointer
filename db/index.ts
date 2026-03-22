@@ -1,13 +1,14 @@
 /**
- * JSON-file based data store.
+ * Data store — Netlify Blobs in production, JSON file locally.
  *
- * Schema v2 — supports:
- *   records[]          — clock-in/out events
- *   employees[]        — registered employees with unique employee_id
- *   attendance_states[]— current in/out state per employee
- *   verification_logs[]— face-verification attempts (pass & fail)
+ * ALL exported functions are async so they work in both environments.
  *
- * Migrates automatically from v1 (flat records array) on first load.
+ * Schema v2:
+ *   records[]           — clock-in/out events
+ *   employees[]         — registered employees
+ *   attendance_states[] — current in/out state per employee
+ *   verification_logs[] — face/PIN verification attempts
+ *   admin_settings      — password hash + recovery contact
  */
 
 import fs from 'fs';
@@ -22,17 +23,12 @@ import type {
   ClockRecordSummary,
 } from '@/types';
 
-// ── Admin settings ────────────────────────────────────────────────────────
+// ── Admin settings type ───────────────────────────────────────────────────
 export interface AdminSettings {
   password_hash: string | null;
   recovery_email: string | null;
   recovery_phone: string | null;
 }
-
-const DB_PATH =
-  process.env.DB_PATH ?? path.join(process.cwd(), 'data', 'records.json');
-
-// ── In-process singleton ──────────────────────────────────────────────────
 
 interface DBData {
   records: ClockRecord[];
@@ -42,95 +38,141 @@ interface DBData {
   admin_settings: AdminSettings | null;
 }
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __db: DBData | undefined;
+// ── Environment detection ─────────────────────────────────────────────────
+// NETLIFY=true is automatically set in all Netlify environments
+const IS_NETLIFY = process.env.NETLIFY === 'true';
+
+// ── Local file path (dev only) ────────────────────────────────────────────
+const DB_PATH =
+  process.env.DB_PATH ?? path.join(process.cwd(), 'data', 'records.json');
+
+const BLOB_STORE = 'samwaypointer';
+const BLOB_KEY = 'db';
+
+// ── In-memory cache (lives for duration of one serverless invocation) ─────
+let memCache: DBData | null = null;
+
+function defaultData(): DBData {
+  return {
+    records: [],
+    employees: [],
+    attendance_states: [],
+    verification_logs: [],
+    admin_settings: null,
+  };
 }
 
-function load(): DBData {
-  if (global.__db) return global.__db;
+// ── Load ──────────────────────────────────────────────────────────────────
+async function load(): Promise<DBData> {
+  if (memCache) return memCache;
 
-  try {
-    const raw = fs.readFileSync(DB_PATH, 'utf-8');
-    const parsed = JSON.parse(raw);
-
-    if (Array.isArray(parsed)) {
-      // Migration from v1 (flat records array)
-      global.__db = {
-        records: parsed,
-        employees: [],
-        attendance_states: [],
-        verification_logs: [],
-        admin_settings: null,
-      };
-      _save(global.__db);
-    } else {
-      global.__db = {
-        records: parsed.records ?? [],
-        employees: parsed.employees ?? [],
-        attendance_states: parsed.attendance_states ?? [],
-        verification_logs: parsed.verification_logs ?? [],
-        admin_settings: parsed.admin_settings ?? null,
-      };
+  if (IS_NETLIFY) {
+    try {
+      const { getStore } = await import('@netlify/blobs');
+      const store = getStore(BLOB_STORE);
+      const raw = await store.get(BLOB_KEY, { type: 'text' });
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        memCache = {
+          records: parsed.records ?? [],
+          employees: parsed.employees ?? [],
+          attendance_states: parsed.attendance_states ?? [],
+          verification_logs: parsed.verification_logs ?? [],
+          admin_settings: parsed.admin_settings ?? null,
+        };
+      } else {
+        memCache = defaultData();
+      }
+    } catch {
+      memCache = defaultData();
     }
-  } catch {
-    global.__db = {
-      records: [],
-      employees: [],
-      attendance_states: [],
-      verification_logs: [],
-      admin_settings: null,
-    };
+  } else {
+    // Local development — read from JSON file
+    try {
+      const raw = fs.readFileSync(DB_PATH, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Migrate from v1 flat records array
+        memCache = { ...defaultData(), records: parsed };
+        await _save(memCache);
+      } else {
+        memCache = {
+          records: parsed.records ?? [],
+          employees: parsed.employees ?? [],
+          attendance_states: parsed.attendance_states ?? [],
+          verification_logs: parsed.verification_logs ?? [],
+          admin_settings: parsed.admin_settings ?? null,
+        };
+      }
+    } catch {
+      memCache = defaultData();
+    }
   }
 
-  return global.__db!;
+  return memCache!;
 }
 
-function _save(data: DBData): void {
-  const dir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
-  global.__db = data;
+// ── Save ──────────────────────────────────────────────────────────────────
+async function _save(data: DBData): Promise<void> {
+  memCache = data;
+
+  if (IS_NETLIFY) {
+    const { getStore } = await import('@netlify/blobs');
+    const store = getStore(BLOB_STORE);
+    await store.set(BLOB_KEY, JSON.stringify(data));
+  } else {
+    const dir = path.dirname(DB_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  }
+}
+
+// ── Tiny ID generator ─────────────────────────────────────────────────────
+function nanoid(): string {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
 // ── Employee functions ────────────────────────────────────────────────────
 
-export function listEmployees(): (Omit<Employee, 'face_photo'> & { has_face_photo: boolean })[] {
-  return load().employees.map(({ face_photo, ...rest }) => ({
+export async function listEmployees(): Promise<
+  (Omit<Employee, 'face_photo'> & { has_face_photo: boolean })[]
+> {
+  const db = await load();
+  return db.employees.map(({ face_photo, ...rest }) => ({
     ...rest,
     has_face_photo: !!face_photo,
   }));
 }
 
-export function getEmployeeById(employee_id: string): Employee | undefined {
-  return load().employees.find((e) => e.employee_id === employee_id);
+export async function getEmployeeById(employee_id: string): Promise<Employee | undefined> {
+  const db = await load();
+  return db.employees.find((e) => e.employee_id === employee_id);
 }
 
-export function getEmployeeByInternalId(id: string): Employee | undefined {
-  return load().employees.find((e) => e.id === id);
+export async function getEmployeeByInternalId(id: string): Promise<Employee | undefined> {
+  const db = await load();
+  return db.employees.find((e) => e.id === id);
 }
 
-export function getEmployeeFacePhoto(employee_id: string): string | null {
-  return load().employees.find((e) => e.employee_id === employee_id)?.face_photo ?? null;
+export async function getEmployeeFacePhoto(employee_id: string): Promise<string | null> {
+  const db = await load();
+  return db.employees.find((e) => e.employee_id === employee_id)?.face_photo ?? null;
 }
 
-export function employeeIdExists(employee_id: string, excludeId?: string): boolean {
-  return load().employees.some(
+export async function employeeIdExists(employee_id: string, excludeId?: string): Promise<boolean> {
+  const db = await load();
+  return db.employees.some(
     (e) => e.employee_id === employee_id && e.id !== excludeId
   );
 }
 
-function nanoid(): string {
-  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-}
-
-export function createEmployee(payload: {
+export async function createEmployee(payload: {
   employee_id: string;
   name: string;
   face_photo?: string | null;
   pin_hash?: string | null;
-}): Employee {
-  const db = load();
+}): Promise<Employee> {
+  const db = await load();
   if (db.employees.some((e) => e.employee_id === payload.employee_id)) {
     throw new Error('DUPLICATE_EMPLOYEE_ID');
   }
@@ -145,15 +187,15 @@ export function createEmployee(payload: {
     updated_at: now,
   };
   db.employees.push(emp);
-  _save(db);
+  await _save(db);
   return emp;
 }
 
-export function updateEmployee(
+export async function updateEmployee(
   id: string,
   payload: Partial<Pick<Employee, 'employee_id' | 'name' | 'face_photo' | 'pin_hash'>>
-): Employee | null {
-  const db = load();
+): Promise<Employee | null> {
+  const db = await load();
   const idx = db.employees.findIndex((e) => e.id === id);
   if (idx === -1) return null;
 
@@ -168,16 +210,16 @@ export function updateEmployee(
     ...payload,
     updated_at: new Date().toISOString(),
   };
-  _save(db);
+  await _save(db);
   return db.employees[idx];
 }
 
-export function deleteEmployee(id: string): boolean {
-  const db = load();
+export async function deleteEmployee(id: string): Promise<boolean> {
+  const db = await load();
   const before = db.employees.length;
   db.employees = db.employees.filter((e) => e.id !== id);
   if (db.employees.length < before) {
-    _save(db);
+    await _save(db);
     return true;
   }
   return false;
@@ -185,41 +227,40 @@ export function deleteEmployee(id: string): boolean {
 
 // ── Attendance state functions ────────────────────────────────────────────
 
-export function getAttendanceState(employee_id: string): AttendanceState | null {
-  return load().attendance_states.find((s) => s.employee_id === employee_id) ?? null;
+export async function getAttendanceState(employee_id: string): Promise<AttendanceState | null> {
+  const db = await load();
+  return db.attendance_states.find((s) => s.employee_id === employee_id) ?? null;
 }
 
-export function setAttendanceState(
+export async function setAttendanceState(
   employee_id: string,
   state: 'in' | 'out',
   last_record_id: number
-): void {
-  const db = load();
+): Promise<void> {
+  const db = await load();
   const now = new Date().toISOString();
   const idx = db.attendance_states.findIndex((s) => s.employee_id === employee_id);
   const entry: AttendanceState = { employee_id, state, last_record_id, updated_at: now };
-
   if (idx === -1) {
     db.attendance_states.push(entry);
   } else {
     db.attendance_states[idx] = entry;
   }
-  _save(db);
+  await _save(db);
 }
 
 // ── Clock record functions ────────────────────────────────────────────────
 
-export function insertRecord(payload: {
+export async function insertRecord(payload: {
   employee_id: string;
   employee_name: string;
   action: ClockAction;
   photo?: string;
   reason?: string | null;
-}): ClockRecord {
-  const db = load();
+}): Promise<ClockRecord> {
+  const db = await load();
   const now = new Date().toISOString();
-  const id =
-    db.records.length > 0 ? db.records[db.records.length - 1].id + 1 : 1;
+  const id = db.records.length > 0 ? db.records[db.records.length - 1].id + 1 : 1;
 
   const record: ClockRecord = {
     id,
@@ -234,16 +275,16 @@ export function insertRecord(payload: {
   };
 
   db.records.push(record);
-  _save(db);
+  await _save(db);
   return record;
 }
 
-export function markNotified(id: number): void {
-  const db = load();
+export async function markNotified(id: number): Promise<void> {
+  const db = await load();
   const rec = db.records.find((r) => r.id === id);
   if (rec) {
     rec.notified = true;
-    _save(db);
+    await _save(db);
   }
 }
 
@@ -255,13 +296,14 @@ export interface QueryOptions {
   pageSize?: number;
 }
 
-export function queryRecords(opts: QueryOptions = {}): {
+export async function queryRecords(opts: QueryOptions = {}): Promise<{
   records: ClockRecordSummary[];
   total: number;
   page: number;
   pageSize: number;
-} {
-  let records = load().records.slice().reverse();
+}> {
+  const db = await load();
+  let records = db.records.slice().reverse();
 
   if (opts.name) {
     const q = opts.name.toLowerCase();
@@ -290,41 +332,44 @@ export function queryRecords(opts: QueryOptions = {}): {
   return { records: stripped, total, page, pageSize };
 }
 
-export function getRecordPhoto(id: number): string | null {
-  return load().records.find((r) => r.id === id)?.photo ?? null;
+export async function getRecordPhoto(id: number): Promise<string | null> {
+  const db = await load();
+  return db.records.find((r) => r.id === id)?.photo ?? null;
 }
 
-export function deleteRecord(id: number): boolean {
-  const db = load();
+export async function deleteRecord(id: number): Promise<boolean> {
+  const db = await load();
   const before = db.records.length;
   db.records = db.records.filter((r) => r.id !== id);
   if (db.records.length < before) {
-    _save(db);
+    await _save(db);
     return true;
   }
   return false;
 }
 
-export function getAllForExport(): Omit<ClockRecord, 'photo'>[] {
-  return load()
-    .records.slice()
+export async function getAllForExport(): Promise<Omit<ClockRecord, 'photo'>[]> {
+  const db = await load();
+  return db.records
+    .slice()
     .reverse()
     .map(({ photo: _p, ...rest }) => rest);
 }
 
 // ── Verification log functions ────────────────────────────────────────────
 
-export function insertVerificationLog(payload: {
+export async function insertVerificationLog(payload: {
   employee_id: string;
   employee_name: string;
   action: ClockAction;
   success: boolean;
   reason?: string | null;
-}): void {
-  const db = load();
-  const id = db.verification_logs.length > 0
-    ? db.verification_logs[db.verification_logs.length - 1].id + 1
-    : 1;
+}): Promise<void> {
+  const db = await load();
+  const id =
+    db.verification_logs.length > 0
+      ? db.verification_logs[db.verification_logs.length - 1].id + 1
+      : 1;
   db.verification_logs.push({
     id,
     employee_id: payload.employee_id,
@@ -334,20 +379,20 @@ export function insertVerificationLog(payload: {
     reason: payload.reason ?? null,
     timestamp: new Date().toISOString(),
   });
-  _save(db);
+  await _save(db);
 }
 
-export function listVerificationLogs(opts: {
-  page?: number;
-  pageSize?: number;
-  name?: string;
-  from?: string;
-  to?: string;
-} = {}): {
-  logs: VerificationLog[];
-  total: number;
-} {
-  let logs = load().verification_logs.slice().reverse();
+export async function listVerificationLogs(
+  opts: {
+    page?: number;
+    pageSize?: number;
+    name?: string;
+    from?: string;
+    to?: string;
+  } = {}
+): Promise<{ logs: VerificationLog[]; total: number }> {
+  const db = await load();
+  let logs = db.verification_logs.slice().reverse();
 
   if (opts.name) {
     const q = opts.name.toLowerCase();
@@ -357,9 +402,7 @@ export function listVerificationLogs(opts: {
         l.employee_id.toLowerCase().includes(q)
     );
   }
-  if (opts.from) {
-    logs = logs.filter((l) => l.timestamp >= opts.from!);
-  }
+  if (opts.from) logs = logs.filter((l) => l.timestamp >= opts.from!);
   if (opts.to) {
     const toEnd = opts.to + 'T23:59:59.999Z';
     logs = logs.filter((l) => l.timestamp <= toEnd);
@@ -368,10 +411,7 @@ export function listVerificationLogs(opts: {
   const total = logs.length;
   const page = opts.page ?? 1;
   const pageSize = opts.pageSize ?? 50;
-  return {
-    logs: logs.slice((page - 1) * pageSize, page * pageSize),
-    total,
-  };
+  return { logs: logs.slice((page - 1) * pageSize, page * pageSize), total };
 }
 
 // ── PIN helpers ───────────────────────────────────────────────────────────
@@ -386,12 +426,13 @@ export async function verifyPin(pin: string, hash: string): Promise<boolean> {
 
 // ── Admin settings ────────────────────────────────────────────────────────
 
-export function getAdminSettings(): AdminSettings | null {
-  return load().admin_settings ?? null;
+export async function getAdminSettings(): Promise<AdminSettings | null> {
+  const db = await load();
+  return db.admin_settings ?? null;
 }
 
-export function setAdminSettings(s: AdminSettings): void {
-  const db = load();
+export async function setAdminSettings(s: AdminSettings): Promise<void> {
+  const db = await load();
   db.admin_settings = s;
-  _save(db);
+  await _save(db);
 }

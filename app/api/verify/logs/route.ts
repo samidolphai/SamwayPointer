@@ -10,6 +10,6 @@ export async function GET(req: Request) {
   const name = url.searchParams.get('name') ?? undefined;
   const from = url.searchParams.get('from') ?? undefined;
   const to = url.searchParams.get('to') ?? undefined;
-  const result = listVerificationLogs({ page, pageSize, name, from, to });
+  const result = await listVerificationLogs({ page, pageSize, name, from, to });
   return NextResponse.json(result);
 }
