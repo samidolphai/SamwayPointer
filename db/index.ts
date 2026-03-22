@@ -1,5 +1,5 @@
 /**
- * Data store — Netlify Blobs in production, JSON file locally.
+ * Data store — Upstash Redis in production (via REST, no SDK), JSON file locally.
  *
  * ALL exported functions are async so they work in both environments.
  *
@@ -9,12 +9,15 @@
  *   attendance_states[] — current in/out state per employee
  *   verification_logs[] — face/PIN verification attempts
  *   admin_settings      — password hash + recovery contact
+ *
+ * Production env vars required on Netlify:
+ *   UPSTASH_REDIS_REST_URL   — e.g. https://xxx.upstash.io
+ *   UPSTASH_REDIS_REST_TOKEN — token from Upstash dashboard
  */
 
 import fs from 'fs';
 import path from 'path';
 import bcryptjs from 'bcryptjs';
-import { getStore } from '@netlify/blobs';
 import type {
   ClockRecord,
   ClockAction,
@@ -40,15 +43,14 @@ interface DBData {
 }
 
 // ── Environment detection ─────────────────────────────────────────────────
-// NETLIFY=true is automatically set in all Netlify environments
 const IS_NETLIFY = process.env.NETLIFY === 'true';
 
 // ── Local file path (dev only) ────────────────────────────────────────────
 const DB_PATH =
   process.env.DB_PATH ?? path.join(process.cwd(), 'data', 'records.json');
 
-const BLOB_STORE = 'samwaypointer';
-const BLOB_KEY = 'db';
+// ── Upstash Redis key ─────────────────────────────────────────────────────
+const REDIS_KEY = 'samwaypointer:db';
 
 // ── In-memory cache (lives for duration of one serverless invocation) ─────
 let memCache: DBData | null = null;
@@ -63,14 +65,46 @@ function defaultData(): DBData {
   };
 }
 
+// ── Upstash REST helpers (no SDK needed — plain fetch) ────────────────────
+async function redisGet(key: string): Promise<string | null> {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) throw new Error('[SamwayPointer] UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not set');
+
+  const res = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error(`[SamwayPointer] Redis GET failed: ${res.status}`);
+  const json = await res.json() as { result: string | null };
+  return json.result ?? null;
+}
+
+async function redisSet(key: string, value: string): Promise<void> {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) throw new Error('[SamwayPointer] UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN not set');
+
+  // Use POST body to handle large JSON values safely
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(['SET', key, value]),
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error(`[SamwayPointer] Redis SET failed: ${res.status}`);
+}
+
 // ── Load ──────────────────────────────────────────────────────────────────
 async function load(): Promise<DBData> {
   if (memCache) return memCache;
 
   if (IS_NETLIFY) {
     try {
-      const store = getStore(BLOB_STORE);
-      const raw = await store.get(BLOB_KEY, { type: 'text' });
+      const raw = await redisGet(REDIS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         memCache = {
@@ -84,8 +118,9 @@ async function load(): Promise<DBData> {
         memCache = defaultData();
       }
     } catch (err) {
-      console.error('[SamwayPointer] Blob load error:', err);
-      memCache = defaultData();
+      console.error('[SamwayPointer] Redis load error:', err);
+      // Do NOT fall back to empty data — throw so the request fails visibly
+      throw err;
     }
   } else {
     // Local development — read from JSON file
@@ -118,13 +153,9 @@ async function _save(data: DBData): Promise<void> {
   memCache = data;
 
   if (IS_NETLIFY) {
-    try {
-      const store = getStore(BLOB_STORE);
-      await store.set(BLOB_KEY, JSON.stringify(data));
-    } catch (err) {
-      console.error('[SamwayPointer] Blob save error:', err);
-      throw err; // re-throw so the API route returns a 500 instead of silently losing data
-    }
+    await redisSet(REDIS_KEY, JSON.stringify(data));
+    // Clear cache after save so next request reads fresh from Redis
+    memCache = null;
   } else {
     const dir = path.dirname(DB_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
