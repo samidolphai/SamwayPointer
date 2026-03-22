@@ -14,6 +14,7 @@
 import fs from 'fs';
 import path from 'path';
 import bcryptjs from 'bcryptjs';
+import { getStore } from '@netlify/blobs';
 import type {
   ClockRecord,
   ClockAction,
@@ -68,7 +69,6 @@ async function load(): Promise<DBData> {
 
   if (IS_NETLIFY) {
     try {
-      const { getStore } = await import('@netlify/blobs');
       const store = getStore(BLOB_STORE);
       const raw = await store.get(BLOB_KEY, { type: 'text' });
       if (raw) {
@@ -83,7 +83,8 @@ async function load(): Promise<DBData> {
       } else {
         memCache = defaultData();
       }
-    } catch {
+    } catch (err) {
+      console.error('[SamwayPointer] Blob load error:', err);
       memCache = defaultData();
     }
   } else {
@@ -117,9 +118,13 @@ async function _save(data: DBData): Promise<void> {
   memCache = data;
 
   if (IS_NETLIFY) {
-    const { getStore } = await import('@netlify/blobs');
-    const store = getStore(BLOB_STORE);
-    await store.set(BLOB_KEY, JSON.stringify(data));
+    try {
+      const store = getStore(BLOB_STORE);
+      await store.set(BLOB_KEY, JSON.stringify(data));
+    } catch (err) {
+      console.error('[SamwayPointer] Blob save error:', err);
+      throw err; // re-throw so the API route returns a 500 instead of silently losing data
+    }
   } else {
     const dir = path.dirname(DB_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
